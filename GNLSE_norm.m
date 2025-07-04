@@ -15,9 +15,9 @@ disp("FWHM Dt = " + num2str(T0 * 1.763) + " (fs)")
 lam0 = 835;       % in nm
 
 
-distance = 2.24; % 1; 
+distance = 2.24; % 1;  % normalized to dispersion length
 
-% normalized to dispersion length
+
 N = 8.5; %sqrt(25); % sqrt(20); %1;          % soliton order
 mshape = 0;     % 0 for sech, m>0 for super-Gaussian
 raman_on           = 1;    % 0 or 1 
@@ -101,7 +101,7 @@ disp("Nonlinear  Length = " + num2str(L_NL) + " (m)")
 % 10000/640 ok 
 % 
 %---set silumation parameters
-nt       = 8000; %2^12;                % N in Agrwal. 
+nt       = 10000; %2^12;                % N in Agrwal. 
 Tmax     = 200; %100;                 % Tm in Agrwal; FFT points and window size
 step_num = 8000; % 1000; % 500;                 % round(40*distance*N^2); 
 zstep    = 100;                 % # of z steps
@@ -117,17 +117,12 @@ omega = fftshift((-nt/2:nt/2-1)*domega );  % freq array
 
 %-----Input Field profile
 if mshape == 0
-    % uu_ini = power_adjustment * sech(tau).*exp(-1i* (chirp0*tau.^2 + chirp_3rd_order*tau.^3 ) );     %soliton;
-    uu_ini = power_adjustment * sech(tau) .^ (1 + 1i) ;    
+    uu_ini = N * sech(tau).*exp(-1i* (chirp0*tau.^2 + chirp_3rd_order*tau.^3 ) );     %soliton;
+    % uu_ini = power_adjustment * sech(tau) .^ (1 + 1i) ;    
 else
     uu_ini = exp(-0.5*(1+1i*chirp0).*tau.^(2*mshape)); %super-Gaussian
 end
 uu = uu_ini; 
-
-%-----Calculate pulse energy (in nJ) 
-pulse_total_energy = 1e9* (T0 * 1e-15 * dtau )  * trapz( (abs(uu_ini)*A_soliton * N ).^2 ); 
-disp("Total pulse energy = " + num2str(pulse_total_energy) + " nJ")
-% pulse_total_energy = 1e9* (T0 * 1e-15 ) * dtau * sum( (abs(uu_ini)*A_soliton).^2 )
 
 
 %-----Defination of Raman response function h(t) 
@@ -140,30 +135,46 @@ h = (1-fb)*(tau1^2 + tau2^2)/(tau1*tau2^2)*exp(-tau/tau2).*sin(tau/tau1)...
       + fb*((2*tau_b-tau)/tau_b^2).*exp(-tau/tau_b);
 h(1:nt/2) = 0;      % causality
 
-%-----Input temporal noise 
-% if temporal_quantum_noise_on == 1 
-%     gaussian_noise = sqrt( hbar_omega0_by_Dt/2 )/A_soliton * randn(size(uu) ,like=1i); 
-%     uu = uu + gaussian_noise; 
-%     noisy_uu_input_all(trial_index, :) = uu; 
-% end 
-
-
-%-----Input freq noise 
-% if frequency_quantum_noise_on == 1 
-%     freq_noise = (sqrt( pi * hbar_Omega_by_Domega )/A_soliton) .* randn( size(uu) ,like=1i); 
-%     % actual_fourier_spectrum = fft(uu) * (dtau*T0*1e-15); 
-%     actual_fourier_spectrum = ifft(uu) * (dtau*T0*1e-15) * nt; 
-%     actual_fourier_spectrum = ifftshift(fftshift(actual_fourier_spectrum) + fftshift(freq_noise)); 
-%     % uu = fft(actual_fourier_spectrum / (dtau*T0*1e-15) ) ; 
-%     uu = fft(actual_fourier_spectrum ) * (domega/(T0*1e-15)) /(2*pi) ; 
-%     noisy_uu_input_all(trial_index, :) = uu;         
-% end 
-
 
 %-----Input 3D data   
-uu_3d(1,:) = uu.*conj(uu);      % Intensity in time domain
+uu_sq_3d(1,:) = uu.*conj(uu);      % Intensity in time domain
 temp = fftshift(ifft(uu));    % use ifft to do FT 
-spect_3d(1,:)=abs(temp).^2;   % spectrum au unit
+spect_sq_3d(1,:)=abs(temp).^2;   % spectrum au unit
+
+
+
+% ** N * sum(abs(ifft(A))^2) = sum(abs(A)^2)*dt/(h*f_0)
+% ** Photon number at each frequency bin = N*abs(ifft(A))^2
+% ***** Assume total number of photons is correct when calculating from
+% time domain 
+
+
+%-----Calculate pulse energy 
+center_freq = 2.998e8 / (lam0 * 1e-9); % in Hz 
+% pulse_total_energy = 1e9* (T0 * 1e-15 * dtau )  * trapz( (abs(uu_ini)*A_soliton * N ).^2 ); 
+pulse_total_energy = (T0*1e-15*dtau) * trapz( abs(uu_ini).^2 ) * A_soliton^2 ; % in J
+disp("Total pulse energy = " + num2str(1e9 * pulse_total_energy) + " nJ")
+
+
+
+% ----- Parseval's theorem in matlab ifft/fft ; sum and trapz yields same result 
+uu_sq_init_integral = trapz( abs(uu).^2 )
+uu_ifft = fftshift(ifft( uu )); 
+spect_sq_init_integral = trapz(abs(uu_ifft).^2)*nt
+
+% ----- check conservation of photon number before and after FT
+dt_SI =  dtau * T0*1e-15; 
+domega_SI = domega / (T0*1e-15); 
+total_photon_number_init_temp   = trapz( abs(uu).^2 ) * (dt_SI)              * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_init_spec   = trapz(abs(uu_ifft).^2)*nt * (dt_SI)        * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_init_spec_2 = trapz(abs(uu_ifft).^2)* 2*pi / (domega_SI) * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_init_spec_3 = trapz(abs(uu_ifft).^2)* nt^2 * dt_SI^2 * domega_SI / (2*pi) * A_soliton^2 / (6.626e-34 * center_freq)
+% ---> 3 equivalent ways to calculate total number of photons in pulse 
+
+% total_initial_photon_spectral = trapz(init_spectrum_sq) 
+% trapz((init_spectrum_sq * A_soliton.^2 * dtau*T0*1e-15)/(6.626e-34 * center_freq) ) * domega/(2*pi*T0*1e-15)
+
+
 
 %----store dispersive phase shifts to speedup code
 dispersion = exp(1i*deltaz* ...
@@ -173,10 +184,10 @@ dispersion = exp(1i*deltaz* ...
     delta5*omega.^5 + ...
     delta6*omega.^6 + ...
     delta7*omega.^7 )); 
-    
-    
-hhz = 1i*N^2*deltaz;    % similar to 'h' in Agrwal
-% hhz = 1i*deltaz;    
+
+% hhz = 1i*N^2*deltaz;    % similar to 'h' in Agrwal; original 
+hhz = 1i*deltaz;    % Modified 07/02/2025: N^2 absorbed into uu 
+
   
 %*********[ Beginning of MAIN Loop]***********
 % scheme: 1/2N -> D -> 1/2N; first half step nonlinear
@@ -216,8 +227,8 @@ for n = 1:step_num
 
     % take sample every ng steps 
     if mod(n,ng) == 0
-         uu_3d((n/ng + 1),:)    =  temp.*conj(temp);  % temporal power
-         spect_3d((n/ng + 1),:) = spect.*conj(spect); % spectral power
+         uu_sq_3d((n/ng + 1),:)    =  temp.*conj(temp);  % temporal power
+         spect_sq_3d((n/ng + 1),:) = spect.*conj(spect); % spectral power
     end
 end
 %***************[ End of MAIN Loop ]**************
@@ -237,12 +248,15 @@ colormap(jet)
 z = linspace(0,distance,zstep+1); % normalised distance
 
 
+
+
+
 subplot(1,2,1);
-% uu_3d = 10*log10(uu_3d);      % convert to dB units
-% pmax = max(max(uu_3d));       % maximum value
-% pcolor(tau,z,uu_3d);          % 3D plot
-pcolor(tau,z, 10*log10(uu_3d) );          % 3D plot
-pmax = max(max( 10*log10(uu_3d) ));       % maximum value
+% uu_sq_3d = 10*log10(uu_sq_3d);      % convert to dB units
+% pmax = max(max(uu_sq_3d));       % maximum value
+% pcolor(tau,z,uu_sq_3d);          % 3D plot
+pcolor(tau,z, 10*log10(uu_sq_3d) );          % 3D plot
+pmax = max(max( 10*log10(uu_sq_3d) ));       % maximum value
 % clim([pmax-100, pmax]); 
 clim([pmax-40, pmax]); 
 xlim([-50,50]); shading interp;
@@ -251,16 +265,16 @@ xlabel('Time (t/T_0)'); ylabel('Distance (z/L_D)')
 colorbar
 
 subplot(1,2,2)
-% spect_3d=10*log10(spect_3d);    % convert to dB units
-% spect_3d=spect_3d;
+% spect_sq_3d=10*log10(spect_sq_3d);    % convert to dB units
+% spect_sq_3d=spect_sq_3d;
 freq = fftshift(omega/(2*pi));  % freq array; --> linear freq ? 
-% pmax = max(max(spect_3d));      % max value for scaling plot
-pmax = max(max( 10*log10(spect_3d) ));       % maximum value
-% pcolor(freq,z,spect_3d);
-pcolor(freq,z, 10*log10(spect_3d) );
+% pmax = max(max(spect_sq_3d));      % max value for scaling plot
+pmax = max(max( 10*log10(spect_sq_3d) ));       % maximum value
+% pcolor(freq,z,spect_sq_3d);
+pcolor(freq,z, 10*log10(spect_sq_3d) );
 hold on 
 % clim([pmax-500, pmax]); 
-clim([pmax-50, pmax]); 
+clim([pmax-40, pmax]); 
 xlim([-4,4]); shading interp;
 set(gca,'FontSize', 12); %title('(a)')
 xlabel('(\nu-\nu_0)T_0'); ylabel('Distance (z/L_D)')
@@ -268,29 +282,29 @@ colorbar
 
 % At t=0 calculate average freq; in normalized units 
 ini_index = 2; 
-mean_freq_ini = trapz(freq, freq .* spect_3d(ini_index ,:) ) / trapz( spect_3d(ini_index  ,:) );
+mean_freq_ini = trapz(freq, freq .* spect_sq_3d(ini_index ,:) ) / trapz( spect_sq_3d(ini_index  ,:) );
 
 % At the end, calculate average freq  
-mean_freq_end = trapz(freq, freq .* spect_3d(end-1,:) )/  trapz(freq, spect_3d(end-1,:) );
+mean_freq_end = trapz(freq, freq .* spect_sq_3d(end-1,:) )/  trapz(freq, spect_sq_3d(end-1,:) );
 % Then plot this point on spectrum ... 
 plot(mean_freq_end, z(end-1), "kx", markersize=15 )
 
 
 % Original figure: Amplitude^2 in log unit
 % subplot(1,2,1);
-% uu_3d = 10*log10(uu_3d);      % convert to dB units
-% pmax = max(max(uu_3d));       % maximum value
-% pcolor(tau,z,uu_3d);          % 3D plot
+% uu_sq_3d = 10*log10(uu_sq_3d);      % convert to dB units
+% pmax = max(max(uu_sq_3d));       % maximum value
+% pcolor(tau,z,uu_sq_3d);          % 3D plot
 % clim([pmax-50, pmax]); 
 % xlim([-50,50]); shading interp;
 % set(gca,'FontSize', 12); %title('(a)')
 % xlabel('Time (t/T_0)'); ylabel('Distance (z/L_D)')
 % subplot(1,2,2)
-% spect_3d=10*log10(spect_3d);    % convert to dB units
-% % spect_3d=spect_3d;
+% spect_sq_3d=10*log10(spect_sq_3d);    % convert to dB units
+% % spect_sq_3d=spect_sq_3d;
 % freq = fftshift(omega/(2*pi));  % freq array
-% pmax = max(max(spect_3d));      % max value for scaling plot
-% pcolor(freq,z,spect_3d);
+% pmax = max(max(spect_sq_3d));      % max value for scaling plot
+% pcolor(freq,z,spect_sq_3d);
 % hold on 
 % clim([pmax-50, pmax]); 
 % xlim([-4,4]); shading interp;
@@ -300,48 +314,49 @@ plot(mean_freq_end, z(end-1), "kx", markersize=15 )
 
 % ------- Initial/Final temporal signal as function of time 
 % figure() 
-% plot(tau*T0 , uu_3d(2,:), tau, uu_3d(100,:) );
-% plot(tau*T0 , uu_3d(1,:), tau*T0, uu_3d(end,:));
+% plot(tau*T0 , uu_sq_3d(2,:), tau, uu_sq_3d(100,:) );
+% plot(tau*T0 , uu_sq_3d(1,:), tau*T0, uu_sq_3d(end,:));
 % xlabel('time (fs)'); ylabel(' uu unit ');
 % xlim([-10,10]);
 % ------- Initial/Final spectrum as function of (diff) frequency 
 % figure() 
 % plot(freq , 10*log10(init_spectrum),freq, 10*log10(final_spectrum) );
 % xlabel('freq. (a.u.)'); ylabel(' dB unit ');
-% pmax = max(max( 10*log10(spect_3d ) ));
+% pmax = max(max( 10*log10(spect_sq_3d ) ));
 % ylim([pmax-30,pmax]);
 
 
-init_spectrum = spect_3d(1,:); 
-final_spectrum = spect_3d(end,:); 
+init_spectrum_sq = spect_sq_3d(1,:); 
+final_spectrum_sq = spect_sq_3d(end,:); 
 
 
-center_freq = 2.998e8 / (lam0 * 1e-9); % in Hz 
+
 diff_freq_hz = freq ./ (T0 * 1e-15); 
 linear_freq_hz = center_freq + diff_freq_hz; % A fraction of the freq < 0 
 
 % convert to wavelength (nm) 
 wavelength_nm = 1e9 * 2.998e8 ./ linear_freq_hz; % only keep positive freq
 [wavelength_nm_sorted, sorted_idx] = sort(wavelength_nm);
-% y_sorted = y(idx);
-init_spectrum_wvl_sorted = init_spectrum(sorted_idx); 
-final_spectrum_wvl_sorted = final_spectrum(sorted_idx); 
 zero_crossing_idx = find(wavelength_nm_sorted > 0, 1 ); 
+
+% y_sorted = y(idx);
+init_spectrum_wvl_sorted = init_spectrum_sq(sorted_idx); 
+final_spectrum_wvl_sorted = final_spectrum_sq(sorted_idx); 
 wavelength_nm_sorted = wavelength_nm_sorted(zero_crossing_idx:end); 
 init_spectrum_wvl_sorted = init_spectrum_wvl_sorted(zero_crossing_idx:end); 
 final_spectrum_wvl_sorted = final_spectrum_wvl_sorted(zero_crossing_idx:end); 
 
 % Initial/Final spectrum (in uu unit) as function of wvl 
-figure() 
-plot( wavelength_nm_sorted , 10*log10(init_spectrum_wvl_sorted), wavelength_nm_sorted, 10*log10(final_spectrum_wvl_sorted) );
-xlabel('wvl (nm)'); ylabel(' ifft(uu)^2 in dB ');
-xlim([400,1400]);
-pmax = max(max( 10*log10(init_spectrum_wvl_sorted) ));
-ylim([pmax-60,pmax]);
+% figure() 
+% plot( wavelength_nm_sorted , 10*log10(init_spectrum_wvl_sorted), wavelength_nm_sorted, 10*log10(final_spectrum_wvl_sorted) );
+% xlabel('wvl (nm)'); ylabel(' ifft(uu)^2 in dB ');
+% xlim([400,1400]);
+% pmax = max(max( 10*log10(init_spectrum_wvl_sorted) ));
+% ylim([pmax-60,pmax]);
 
 
-% Initial/Final spectrum (in uu unit) as function of wvl 
-eta = A_soliton * N; 
+% Initial/Final spectrum (in photon unit) as function of wvl 
+eta = A_soliton * 1; 
 init_spectrum_wvl_sorted_photon_unit = ((init_spectrum_wvl_sorted * eta).^2 * dtau*T0*1e-15)/(6.626e-34 * center_freq); 
 final_spectrum_wvl_sorted_photon_unit = ((final_spectrum_wvl_sorted * eta).^2 * dtau*T0*1e-15)/(6.626e-34 * center_freq); 
 figure() 
@@ -349,7 +364,22 @@ plot( wavelength_nm_sorted , log10(init_spectrum_wvl_sorted_photon_unit), wavele
 xlabel('wvl (nm)'); ylabel('Photon unit: log10( n(\lambda)) ');
 xlim([400,1400]);
 pmax = max(max( log10(init_spectrum_wvl_sorted_photon_unit) ));
-ylim([pmax-15,pmax]);
+% ylim([pmax-15,pmax]);
+ylim([-15, 0]);
+
+
+
+figure() 
+plot( tau, 10*log10(uu_sq_3d(end, :)))
+
+
+% ------- calculate total number of photoncs: initial and final 
+
+total_photon_number_final_temp   = trapz( uu_sq_3d(end, :) ) * (dt_SI)              * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_final_spec   = trapz( spect_sq_3d(end, :) )* nt * (dt_SI)        * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_final_spec_2 = trapz( spect_sq_3d(end, :) )* 2*pi / (domega_SI) * A_soliton^2 / (6.626e-34 * center_freq)
+total_photon_number_final_spec_3 = trapz( spect_sq_3d(end, :) )* nt^2 * dt_SI^2 * domega_SI / (2*pi) * A_soliton^2 / (6.626e-34 * center_freq)
+
 
 
 % ------ Plot Spectogram
